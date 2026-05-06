@@ -432,23 +432,8 @@ function citizenPage() {
 }
 
 function documentAIPage() {
-  const extracted = state.docExtract || {
-    name: "Gurmeet Kaur",
-    aadhaarMasked: "XXXX-XXXX-2841",
-    dob: "1961-04-12",
-    age: 65,
-    gender: "F",
-    address: "Khera, Ludhiana, Punjab",
-    documentsDetected: ["Aadhaar", "Ration Card", "Bank Account"],
-    confidence: "Demo 91%",
-    occupation: "Homemaker",
-    marital: "Widow",
-    income: 36000,
-    bpl: true,
-    disability: false,
-    caste: "General"
-  };
-  const matches = state.docMatches.length ? state.docMatches : calculateEligibility(extracted);
+  const extracted = state.docExtract;
+  const matches = state.docMatches;
   return `
     <main class="page">
       <div class="section-title">
@@ -468,7 +453,7 @@ function documentAIPage() {
             </div>
             <div class="field">
               <label>Optional document text for demo extraction</label>
-              <textarea id="documentText">Aadhaar card: Gurmeet Kaur, female, DOB 12/04/1961, Khera Ludhiana Punjab. Widow, BPL ration card, annual income 36000, bank account available.</textarea>
+              <textarea id="documentText" placeholder="Paste OCR text if you have it, or leave blank and upload a file. Example: Aadhaar card: Gurmeet Kaur, female, DOB 12/04/1961..."></textarea>
             </div>
             <button class="primary" data-action="processDocument">Extract and Match Yojana</button>
           </div>
@@ -482,9 +467,9 @@ function documentAIPage() {
         </section>
         <section class="card pad">
           <h2>Extracted Features</h2>
-          <pre id="documentJson">${JSON.stringify(extracted, null, 2)}</pre>
+          <pre id="documentJson">${extracted ? JSON.stringify(extracted, null, 2) : "No document processed yet.\n\nChoose a file and click Extract and Match Yojana."}</pre>
           <div class="tag-list">
-            ${extracted.documentsDetected.map(doc => `<span class="tag">${doc}</span>`).join("")}
+            ${extracted ? extracted.documentsDetected.map(doc => `<span class="tag">${doc}</span>`).join("") : `<span class="tag">Waiting for upload</span>`}
           </div>
         </section>
       </div>
@@ -496,7 +481,7 @@ function documentAIPage() {
           </div>
           <button class="secondary" data-action="speakDocument">Speak Document Result</button>
         </div>
-        <div class="result-list">${matches.map(schemeCard).join("")}</div>
+        <div class="result-list">${matches.length ? matches.map(schemeCard).join("") : `<div class="card pad" style="box-shadow:none;background:#fbfefd">Upload and process a document to see matched yojanas here.</div>`}</div>
       </section>
       <section class="card pad" style="margin-top:16px">
         <h2>Oracle Tables Used</h2>
@@ -1174,12 +1159,16 @@ function extractProfile(text) {
   return profile;
 }
 
-function extractDocumentProfile(text, fileName = "") {
-  const lower = `${text} ${fileName}`.toLowerCase();
-  const profile = extractProfile(text);
-  const dobMatch = text.match(/(?:dob|date of birth|ਜਨਮ)[^\d]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
-  const aadhaarMatch = text.match(/\b(\d{4})\s?(\d{4})\s?(\d{4})\b/);
-  const nameMatch = text.match(/(?:name|aadhaar card:?)\s*[:\-]?\s*([A-Za-z ]{3,40})/i);
+function extractDocumentProfile(text, file = null) {
+  const fileName = file?.name || "";
+  const fileType = file?.type || "";
+  const lower = `${text} ${fileName} ${fileType}`.toLowerCase();
+  const syntheticText = text || inferDocumentTextFromFile(fileName, fileType);
+  const profile = extractProfile(syntheticText);
+  const sourceText = `${syntheticText} ${fileName}`;
+  const dobMatch = sourceText.match(/(?:dob|date of birth|ਜਨਮ)[^\d]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
+  const aadhaarMatch = sourceText.match(/\b(\d{4})\s?(\d{4})\s?(\d{4})\b/);
+  const nameMatch = sourceText.match(/(?:name|aadhaar card:?)\s*[:\-]?\s*([A-Za-z ]{3,40})/i);
   const docs = [];
   if (lower.includes("aadhaar") || lower.includes("adhar") || aadhaarMatch || fileName) docs.push("Aadhaar");
   if (lower.includes("ration") || lower.includes("bpl")) docs.push("Ration Card");
@@ -1204,8 +1193,43 @@ function extractDocumentProfile(text, fileName = "") {
     bpl: profile.bpl || lower.includes("ration"),
     disability: profile.disability,
     caste: profile.caste,
+    uploadedFile: fileName || "No file name",
+    fileType: fileType || "unknown",
+    extractionMode: text ? "User/OCR text + file metadata" : "Simulated OCR from uploaded file metadata",
     oracleInsert: "BENEFICIARY + DOCUMENT + ELIGIBILITY_MATCH"
   };
+}
+
+function inferDocumentTextFromFile(fileName, fileType) {
+  const lower = `${fileName} ${fileType}`.toLowerCase();
+  if (lower.includes("student") || lower.includes("marksheet") || lower.includes("scholarship")) {
+    return "Name: Aman Singh, male, DOB 15/08/2006, student, SC caste certificate, income 0, BPL, bank account available.";
+  }
+  if (lower.includes("disability") || lower.includes("disabled")) {
+    return "Name: Harpreet Singh, male, DOB 10/02/1980, disability certificate, income 60000, BPL, bank account available.";
+  }
+  if (lower.includes("farmer") || lower.includes("land") || lower.includes("kisan")) {
+    return "Name: Baldev Singh, male, DOB 11/05/1975, farmer, land record, income 90000, bank account available.";
+  }
+  if (lower.includes("widow") || lower.includes("pension") || lower.includes("aadhaar") || lower.includes("adhar")) {
+    return "Aadhaar card: Gurmeet Kaur, female, DOB 12/04/1961, Khera Ludhiana Punjab. Widow, BPL ration card, annual income 36000, bank account available.";
+  }
+  if (lower.includes("ration") || lower.includes("bpl")) {
+    return "Name: Meena Devi, female, DOB 09/09/1997, married, BPL ration card, annual income 65000, bank account available.";
+  }
+  return "Aadhaar document uploaded. Name: Gurmeet Kaur, female, DOB 12/04/1961, Khera Ludhiana Punjab. BPL ration card, annual income 36000, bank account available.";
+}
+
+function readUploadedDocument(file) {
+  return new Promise((resolve) => {
+    if (!file) return resolve("");
+    const canReadAsText = file.type.startsWith("text/") || /\.(txt|csv|json|md)$/i.test(file.name);
+    if (!canReadAsText) return resolve("");
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => resolve("");
+    reader.readAsText(file);
+  });
 }
 
 function schemeCard(scheme) {
@@ -1431,10 +1455,12 @@ function attachEvents() {
     toast("Field report extracted, saved, and routed.");
   }));
 
-  document.querySelectorAll("[data-action='processDocument']").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll("[data-action='processDocument']").forEach(btn => btn.addEventListener("click", async () => {
     const file = document.getElementById("documentFile").files[0];
-    const text = document.getElementById("documentText").value;
-    state.docExtract = extractDocumentProfile(text, file?.name || "");
+    const typedText = document.getElementById("documentText").value.trim();
+    const fileText = await readUploadedDocument(file);
+    const mergedText = [typedText, fileText].filter(Boolean).join("\n");
+    state.docExtract = extractDocumentProfile(mergedText, file || null);
     state.docMatches = calculateEligibility(state.docExtract);
     toast(`Document extracted. ${state.docMatches.length} yojanas matched.`);
     render();
